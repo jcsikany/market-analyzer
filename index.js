@@ -223,29 +223,35 @@ app.get('/paper-trades/summary', (req, res) => {
 
 /** Mini chart data para sparklines */
 app.get('/chart/:symbol', async (req, res) => {
-  try {
-    const yahooFinance = require('yahoo-finance2').default;
-    const symbol = req.params.symbol.toUpperCase();
-    const days = parseInt(req.query.days) || 5;
+  const yahooFinance = require('yahoo-finance2').default;
+  const symbol = req.params.symbol.toUpperCase();
+  const days = parseInt(req.query.days) || 5;
 
-    const endDate = new Date();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - (days * 2)); // extra days for weekends
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      if (attempt > 1) await new Promise(r => setTimeout(r, attempt * 1000));
 
-    const result = await yahooFinance.chart(symbol, {
-      period1: startDate,
-      period2: endDate,
-      interval: '1d',
-    });
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - (days * 2));
 
-    const quotes = (result.quotes || []).slice(-days);
-    const prices = quotes.map(q => q.close).filter(Boolean);
-    const dates = quotes.map(q => q.date?.toISOString?.() || '');
+      const result = await yahooFinance.chart(symbol, {
+        period1: startDate,
+        period2: endDate,
+        interval: '1d',
+      });
 
-    res.json({ symbol, prices, dates });
-  } catch (err) {
-    console.error(`[Chart] Error for ${req.params.symbol}:`, err.message);
-    res.status(500).json({ error: `Chart data unavailable for ${req.params.symbol}`, detail: err.message });
+      const quotes = (result.quotes || []).slice(-days);
+      const prices = quotes.map(q => q.close).filter(Boolean);
+      const dates = quotes.map(q => q.date?.toISOString?.() || '');
+
+      return res.json({ symbol, prices, dates });
+    } catch (err) {
+      if (attempt === 3) {
+        console.error(`[Chart] Failed after 3 attempts for ${symbol}:`, err.message);
+        return res.json({ symbol, prices: [], dates: [] }); // retorna vacío, no error 500
+      }
+    }
   }
 });
 
