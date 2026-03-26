@@ -13,10 +13,11 @@ async function fetchTechnicals(symbol, days = 60) {
     const quotes = chart?.quotes ?? [];
     if (quotes.length < 20) throw new Error(`Not enough data for ${symbol}: ${quotes.length} candles`);
 
-    const closes = quotes.map(q => q.close).filter(Boolean);
-    const highs  = quotes.map(q => q.high).filter(Boolean);
-    const lows   = quotes.map(q => q.low).filter(Boolean);
-    const vols   = quotes.map(q => q.volume).filter(Boolean);
+    const complete = quotes.filter(q => q.close && q.high && q.low && q.volume);
+    const closes = complete.map(q => q.close);
+    const highs  = complete.map(q => q.high);
+    const lows   = complete.map(q => q.low);
+    const vols   = complete.map(q => q.volume);
 
     const last = closes[closes.length - 1];
     const prev = closes[closes.length - 2];
