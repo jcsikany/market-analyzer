@@ -3,6 +3,7 @@ const { runAnalysis } = require('./services/orchestrator');
 const { isMarketOpenToday } = require('./utils/holidays');
 
 let cronJob = null;
+let outcomeJob = null;
 
 function delayToTime(delayMinutes) {
   const openHour = 9;
@@ -15,6 +16,25 @@ function delayToTime(delayMinutes) {
 
 function setupCron() {
   startCronWithDelay(global.appState?.settings?.delayMinutes ?? 30);
+  setupOutcomeChecker();
+}
+
+function setupOutcomeChecker() {
+  // Verificar outcomes a las 4:30 PM ET, lunes a viernes
+  outcomeJob = cron.schedule(
+    '30 16 * * 1-5',
+    async () => {
+      console.log('[Scheduler] Running outcome checker...');
+      try {
+        const { checkOutcomes } = require('./services/outcomeChecker');
+        await checkOutcomes();
+      } catch (err) {
+        console.error('[Scheduler] Outcome checker error:', err.message);
+      }
+    },
+    { timezone: 'America/New_York', scheduled: true }
+  );
+  console.log('[Scheduler] Outcome checker active: Mon-Fri at 4:30 PM ET');
 }
 
 function startCronWithDelay(delayMinutes) {

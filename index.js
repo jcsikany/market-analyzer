@@ -3,15 +3,16 @@ const express = require('express');
 const cors = require('cors');
 const { setupCron, updateDelay } = require('./scheduler');
 const { runAnalysis, isRunning } = require('./services/orchestrator');
+const db = require('./db');
 
 // ─── Estado global de la aplicación ───────────────────────────────────────────
 global.appState = {
   latestAnalysis: null,
   analysisHistory: [],
   settings: {
-    delayMinutes: 30,       // Minutos después de la apertura de Wall Street
-    enabled: true,          // Análisis automático activado
-    pushTokens: [],         // Tokens de dispositivos registrados
+    delayMinutes: 30,
+    enabled: true,
+    pushTokens: [],
   },
 };
 
@@ -20,16 +21,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Logging de requests
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
 
-// ─── Auth middleware (para endpoints sensibles) ────────────────────────────────
+// ─── Auth middleware ────────────────────────────────────────────────────────
 function requireSecret(req, res, next) {
   const secret = process.env.API_SECRET;
-  if (!secret) return next(); // Si no hay secret configurado, no bloquear
+  if (!secret) return next();
   const provided = req.headers['x-api-secret'] || req.query.secret;
   if (provided !== secret) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -37,7 +37,7 @@ function requireSecret(req, res, next) {
   next();
 }
 
-// ─── Routes ────────────────────────────────────────────────────────────────────
+// ─── Existing Routes ────────────────────────────────────────────────────────
 
 /** Health check */
 app.get('/health', (req, res) => {
@@ -56,7 +56,8 @@ app.get('/health', (req, res) => {
 
 /** Obtener el último análisis */
 app.get('/analysis/latest', (req, res) => {
-  const analysis = global.appState.latestAnalysis;
+  // Primero intentar cache en memoria, luego DB
+  const analysis = global.appState.latestAnalysis || db.getLatestAnalysis();
   if (!analysis) {
     return res.json({
       analysis: null,
@@ -66,9 +67,15 @@ app.get('/analysis/latest', (req, res) => {
   res.json({ analysis });
 });
 
-/** Historial de análisis (últimos 10) */
+/** Historial de análisis con filtros opcionales */
 app.get('/analysis/history', (req, res) => {
-  res.json({ history: global.appState.analysisHistory });
+  const { limit, offset, bias, ticker, outcome, from, to } = req.query;
+  const history = db.getAnalysisHistory({
+    limit: parseInt(limit) || 20,
+    offset: parseInt(offset) || 0,
+    bias, ticker, outcome, from, to,
+  });
+  res.json({ history });
 });
 
 /** Disparar análisis manual */
@@ -80,7 +87,6 @@ app.post('/analysis/trigger', requireSecret, async (req, res) => {
     });
   }
 
-  // Responder inmediatamente y correr el análisis en background
   res.json({
     message: 'Análisis iniciado. Tomará entre 15-30 segundos.',
     isRunning: true
@@ -91,7 +97,7 @@ app.post('/analysis/trigger', requireSecret, async (req, res) => {
   });
 });
 
-/** Estado del análisis (polling mientras corre) */
+/** Estado del análisis (polling) */
 app.get('/analysis/status', (req, res) => {
   res.json({
     isRunning: isRunning(),
@@ -130,20 +136,16 @@ app.post('/settings', requireSecret, (req, res) => {
   });
 });
 
-/** Registrar push token de dispositivo */
+/** Registrar push token */
 app.post('/register-token', (req, res) => {
   const { token } = req.body;
-
-  if (!token) {
-    return res.status(400).json({ error: 'Token requerido' });
-  }
+  if (!token) return res.status(400).json({ error: 'Token requerido' });
 
   const tokens = global.appState.settings.pushTokens;
   if (!tokens.includes(token)) {
     tokens.push(token);
     console.log(`[Push] New token registered. Total: ${tokens.length}`);
   }
-
   res.json({ success: true, totalDevices: tokens.length });
 });
 
@@ -156,16 +158,122 @@ app.delete('/register-token', (req, res) => {
   res.json({ success: true });
 });
 
+// ─── Nuevos endpoints: Recommendations ─────────────────────────────────────
+
+/** Listar recomendaciones con filtros */
+app.get('/recommendations', (req, res) => {
+  const { outcome, ticker, limit, offset } = req.query;
+  const recs = db.getRecommendations({
+    outcome, ticker,
+    limit: parseInt(limit) || 50,
+    offset: parseInt(offset) || 0,
+  });
+  res.json({ recommendations: recs });
+});
+
+/** Obtener una recomendación por ID */
+app.get('/recommendations/:id', (req, res) => {
+  const rec = db.getRecommendation(req.params.id);
+  if (!rec) return res.status(404).json({ error: 'Recomendación no encontrada' });
+  res.json({ recommendation: rec });
+});
+
+/** Marcar recomendación como paper trade */
+app.post('/recommendations/:id/paper-trade', (req, res) => {
+  const rec = db.getRecommendation(req.params.id);
+  if (!rec) return res.status(404).json({ error: 'Recomendación no encontrada' });
+  db.setPaperTrade(req.params.id);
+  res.json({ success: true, message: 'Paper trade registrado' });
+});
+
+/** Verificar outcome de una recomendación manualmente */
+app.post('/recommendations/:id/check', requireSecret, async (req, res) => {
+  try {
+    const { checkSingleOutcome } = require('./services/outcomeChecker');
+    const result = await checkSingleOutcome(req.params.id);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Nuevos endpoints: Performance ──────────────────────────────────────────
+
+/** Stats de performance agregadas */
+app.get('/performance', (req, res) => {
+  const stats = db.getPerformanceStats();
+  res.json({ performance: stats });
+});
+
+// ─── Nuevos endpoints: Paper Trades ──────────────────────────────────────────
+
+/** Listar paper trades */
+app.get('/paper-trades', (req, res) => {
+  const trades = db.getPaperTrades();
+  res.json({ trades });
+});
+
+/** Resumen de paper trading P&L */
+app.get('/paper-trades/summary', (req, res) => {
+  const summary = db.getPaperTradesSummary();
+  res.json({ summary });
+});
+
+// ─── Nuevos endpoints: Charts ───────────────────────────────────────────────
+
+/** Mini chart data para sparklines */
+app.get('/chart/:symbol', async (req, res) => {
+  try {
+    const yahooFinance = require('yahoo-finance2').default;
+    const symbol = req.params.symbol.toUpperCase();
+    const days = parseInt(req.query.days) || 5;
+
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - (days * 2)); // extra days for weekends
+
+    const result = await yahooFinance.chart(symbol, {
+      period1: startDate.toISOString().split('T')[0],
+      period2: endDate.toISOString().split('T')[0],
+      interval: '1d',
+    });
+
+    const quotes = (result.quotes || []).slice(-days);
+    const prices = quotes.map(q => q.close).filter(Boolean);
+    const dates = quotes.map(q => q.date?.toISOString?.() || '');
+
+    res.json({ symbol, prices, dates });
+  } catch (err) {
+    res.status(500).json({ error: `Chart data unavailable for ${req.params.symbol}` });
+  }
+});
+
 // ─── Start ──────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
-  console.log(`\n🚀 Market Analyzer Server running on port ${PORT}`);
-  console.log(`📅 Auto-analysis: Mon-Fri, ${global.appState.settings.delayMinutes}min after market open`);
-  console.log(`🔑 API_SECRET: ${process.env.API_SECRET ? 'configured' : 'NOT configured (open access)'}\n`);
+async function startServer() {
+  // Inicializar DB antes de todo
+  await db.initDB();
 
-  // Iniciar cron scheduler
-  setupCron();
+  // Cargar último análisis de la DB
+  const lastFromDb = db.getLatestAnalysis();
+  if (lastFromDb) {
+    global.appState.latestAnalysis = lastFromDb;
+    console.log('[Server] Loaded latest analysis from DB');
+  }
+
+  app.listen(PORT, () => {
+    console.log(`\n🚀 Market Analyzer Server running on port ${PORT}`);
+    console.log(`📅 Auto-analysis: Mon-Fri, ${global.appState.settings.delayMinutes}min after market open`);
+    console.log(`🔑 API_SECRET: ${process.env.API_SECRET ? 'configured' : 'NOT configured (open access)'}\n`);
+
+    setupCron();
+  });
+}
+
+startServer().catch(err => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
 });
 
 module.exports = app;

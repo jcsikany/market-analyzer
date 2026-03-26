@@ -8,6 +8,11 @@ const { analyzeWithClaude, runPhaseOne } = require('./claude');
 const { sendPushNotification } = require('./push');
 const { isMarketOpenToday } = require('../utils/holidays');
 const { parallelWithFallback } = require('../utils/retry');
+const { fetchMacroData } = require('./fred');
+const { fetchInsiderTrading } = require('./secEdgar');
+const { fetchAdditionalTechnicals } = require('./alphaVantage');
+const { computeConfluence } = require('./confluenceScore');
+const db = require('../db');
 
 let isRunning = false;
 
@@ -19,7 +24,7 @@ async function runAnalysis({ manual = false } = {}) {
 
   isRunning = true;
   const startTime = Date.now();
-  console.log(`\n[Orchestrator] ===== Starting Analysis v2 (${manual ? 'MANUAL' : 'AUTO'}) =====`);
+  console.log(`\n[Orchestrator] ===== Starting Analysis v3 (${manual ? 'MANUAL' : 'AUTO'}) =====`);
 
   try {
     if (!manual) {
@@ -33,25 +38,28 @@ async function runAnalysis({ manual = false } = {}) {
 
     const delayMinutes = global.appState?.settings?.delayMinutes ?? 30;
 
-    console.log('[Orchestrator] Stage 1: Fetching primary data in parallel...');
+    // ─── Stage 1: Primary data + macro (parallel) ───────────────────────────
+    console.log('[Orchestrator] Stage 1: Fetching primary data + macro in parallel...');
 
-    const [marketData, news, sentiment, economicCalendar] = await parallelWithFallback([
+    const [marketData, news, sentiment, economicCalendar, macroData] = await parallelWithFallback([
       { fn: () => fetchMarketData(), fallback: null, label: 'marketData' },
       { fn: () => fetchNews(), fallback: { headlines: [], error: 'News unavailable' }, label: 'news' },
       { fn: () => fetchSentiment(), fallback: { score: null, rating: 'UNAVAILABLE', label: 'No disponible' }, label: 'sentiment' },
       { fn: () => fetchEconomicCalendar(), fallback: { events: [], highImpact: false, hasEvents: false, summary: 'No disponible', warningLevel: 'UNKNOWN' }, label: 'economicCalendar' },
+      { fn: () => fetchMacroData(), fallback: null, label: 'fred' },
     ]);
 
     if (!marketData) {
       throw new Error('Market data fetch failed completely — cannot proceed without core data');
     }
 
+    // ─── Stage 1.5: Phase 1 - Claude identifica candidatos ─────────────────
     console.log('[Orchestrator] Stage 1.5: Phase 1 - Identifying candidates...');
 
-    const pastAnalyses = (global.appState?.analysisHistory ?? []).slice(0, 3);
+    const pastAnalyses = db.getAnalysisHistory({ limit: 3 });
 
     const phase1Result = await runPhaseOne({
-      marketData, news, sentiment, economicCalendar, delayMinutes,
+      marketData, news, sentiment, economicCalendar, macroData, delayMinutes,
     }).catch(err => {
       console.error('[Orchestrator] Phase 1 failed:', err.message);
       return null;
@@ -66,21 +74,42 @@ async function runAnalysis({ manual = false } = {}) {
       ? [...new Set(candidateSymbols)]
       : [...new Set(fallbackSymbols)];
 
-    console.log(`[Orchestrator] Stage 2: Fetching technicals + earnings for ${symbolsToAnalyze.length} symbols: ${symbolsToAnalyze.join(', ')}`);
+    // ─── Stage 2: Technicals + earnings + insider + alpha vantage ───────────
+    console.log(`[Orchestrator] Stage 2: Fetching technicals + extras for ${symbolsToAnalyze.length} symbols: ${symbolsToAnalyze.join(', ')}`);
 
-    const [technicals, earningsRisk] = await parallelWithFallback([
+    const [technicals, earningsRisk, insiderData, avData] = await parallelWithFallback([
       { fn: () => fetchTechnicalsForSymbols(symbolsToAnalyze), fallback: {}, label: 'technicals' },
       { fn: async () => flagEarningsRisk(symbolsToAnalyze), fallback: new Map(), label: 'earningsRisk' },
+      { fn: () => fetchInsiderTrading(symbolsToAnalyze), fallback: {}, label: 'insiderTrading' },
+      { fn: () => fetchAdditionalTechnicals(symbolsToAnalyze), fallback: {}, label: 'alphaVantage' },
     ]);
 
+    // ─── Stage 3: Phase 2 - Deep analysis con Claude ───────────────────────
     console.log('[Orchestrator] Stage 3: Phase 2 - Deep analysis...');
 
     const analysis = await analyzeWithClaude({
-      marketData, news, sentiment, economicCalendar,
+      marketData, news, sentiment, economicCalendar, macroData,
       technicals: technicals ?? {},
       earningsRisk: earningsRisk ?? new Map(),
+      insiderData: insiderData ?? {},
       delayMinutes, pastAnalyses,
     });
+
+    // ─── Stage 4: Confluence scores ─────────────────────────────────────────
+    console.log('[Orchestrator] Stage 4: Computing confluence scores...');
+
+    if (analysis.recommendations?.length > 0) {
+      analysis.recommendations = analysis.recommendations.map(rec => {
+        const confluence = computeConfluence(rec, technicals, macroData, insiderData, sentiment);
+        return {
+          ...rec,
+          confluenceScore: confluence.score,
+          confluenceTotal: confluence.total,
+          confluenceInterpretation: confluence.interpretation,
+          confluenceFactors: confluence.factors,
+        };
+      });
+    }
 
     const duration = Date.now() - startTime;
     const result = {
@@ -95,13 +124,31 @@ async function runAnalysis({ manual = false } = {}) {
           hasNews: (news?.headlines?.length ?? 0) > 0,
           hasTechnicals: Object.values(technicals ?? {}).filter(Boolean).length,
           hasEarningsData: (earningsRisk instanceof Map) && earningsRisk.size > 0,
+          hasMacro: !!macroData,
+          hasInsiderData: Object.keys(insiderData ?? {}).length > 0,
+          hasAlphaVantage: Object.keys(avData ?? {}).length > 0,
         },
       },
     };
 
+    // Guardar en DB y actualizar cache en memoria
+    const savedResult = db.saveAnalysis(result);
+
+    // Guardar confluence scores en la DB
+    if (savedResult.recommendations?.length > 0) {
+      for (const rec of savedResult.recommendations) {
+        if (rec._id && rec.confluenceScore != null) {
+          db.updateConfluence(rec._id, rec.confluenceScore, {
+            total: rec.confluenceTotal,
+            interpretation: rec.confluenceInterpretation,
+            factors: rec.confluenceFactors,
+          });
+        }
+      }
+    }
+
     if (global.appState) {
-      global.appState.latestAnalysis = result;
-      global.appState.analysisHistory = [result, ...(global.appState.analysisHistory ?? []).slice(0, 9)];
+      global.appState.latestAnalysis = savedResult;
     }
 
     const tokens = global.appState?.settings?.pushTokens ?? [];
@@ -111,6 +158,11 @@ async function runAnalysis({ manual = false } = {}) {
     console.log(`[Orchestrator] Symbols: ${symbolsToAnalyze.join(', ')}`);
     console.log(`[Orchestrator] Recommendations: ${analysis.recommendations?.length ?? 0}`);
     console.log(`[Orchestrator] Should trade: ${analysis.shouldTrade}`);
+    if (analysis.recommendations?.length > 0) {
+      analysis.recommendations.forEach(r => {
+        console.log(`[Orchestrator]   ${r.ticker}: Confluencia ${r.confluenceScore}/${r.confluenceTotal} — ${r.confluenceInterpretation}`);
+      });
+    }
 
     return result;
 

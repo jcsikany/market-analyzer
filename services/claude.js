@@ -4,9 +4,9 @@ const { withRetry } = require('../utils/retry');
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = 'claude-opus-4-6';
 
-async function phaseOne({ marketData, news, sentiment, economicCalendar, delayMinutes }) {
+async function phaseOne({ marketData, news, sentiment, economicCalendar, macroData, delayMinutes }) {
   console.log('[Claude Phase 1] Identifying top candidates...');
-  const prompt = buildPhaseOnePrompt({ marketData, news, sentiment, economicCalendar, delayMinutes });
+  const prompt = buildPhaseOnePrompt({ marketData, news, sentiment, economicCalendar, macroData, delayMinutes });
   const message = await withRetry(() => client.messages.create({
     model: MODEL, max_tokens: 1024,
     system: `Sos un trader profesional de Wall Street con 20+ años de experiencia en análisis técnico y fundamental.
@@ -31,9 +31,9 @@ Sos conservador: si un setup no es claro o el riesgo es alto, no lo incluís.`,
   return parseJSON(message.content[0]?.text, 'phase2');
 }
 
-async function analyzeWithClaude({ marketData, news, sentiment, economicCalendar, technicals, earningsRisk, delayMinutes = 30, pastAnalyses = [] }) {
+async function analyzeWithClaude({ marketData, news, sentiment, economicCalendar, macroData, technicals, earningsRisk, insiderData, delayMinutes = 30, pastAnalyses = [] }) {
   const startTime = Date.now();
-  const phase1 = await phaseOne({ marketData, news, sentiment, economicCalendar, delayMinutes });
+  const phase1 = await phaseOne({ marketData, news, sentiment, economicCalendar, macroData, delayMinutes });
 
   if (!phase1 || phase1.error) {
     throw new Error('Phase 1 analysis failed: ' + (phase1?.error || 'unknown'));
@@ -48,7 +48,7 @@ async function analyzeWithClaude({ marketData, news, sentiment, economicCalendar
   const candidateTechnicals = {};
   candidates.forEach(c => { if (technicals[c.ticker]) candidateTechnicals[c.ticker] = technicals[c.ticker]; });
 
-  const phase2 = await phaseTwo({ phase1Result: phase1, technicals: candidateTechnicals, earningsRisk, pastAnalyses });
+  const phase2 = await phaseTwo({ phase1Result: phase1, technicals: candidateTechnicals, earningsRisk, insiderData, macroData, pastAnalyses });
 
   if (!phase2 || phase2.error) console.warn('[Claude] Phase 2 failed, using Phase 1 context only.');
 
@@ -155,7 +155,7 @@ function buildMemoryContext(pastAnalyses) {
   return `\n═══════════════════════════════════════\n🧠 CONTEXTO DE ANÁLISIS ANTERIORES (últimos ${recent.length} días hábiles)\n═══════════════════════════════════════\n${lines.join('\n')}\n\nUsá este contexto para identificar tendencias y ajustar el sesgo.\n`;
 }
 
-function buildPhaseOnePrompt({ marketData, news, sentiment, economicCalendar, delayMinutes }) {
+function buildPhaseOnePrompt({ marketData, news, sentiment, economicCalendar, macroData, delayMinutes }) {
   const etTime = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true });
   const { indices, vix, sectors, gainers, unusualVolume, gapAnalysis, preMarket, breadth } = marketData;
 
@@ -199,6 +199,7 @@ ${economicCalendar?.summary ? `→ ${economicCalendar.summary}` : ''}
 
 NOTICIAS (últimas 18h)
 ${newsSection}
+${macroData?.summary ? `\nENTORNO MACROECONÓMICO (FRED)\n  ${macroData.summary}\n  Señal: ${macroData.macroSignal?.signal ?? 'N/A'}\n  ${(macroData.macroSignal?.reasons ?? []).map(r => '  → ' + r).join('\n') || ''}` : ''}
 
 INSTRUCCIONES FASE 1:
 Analizá el contexto global y seleccioná hasta 5 candidatos con mayor potencial.
@@ -227,7 +228,7 @@ RESPONDÉ SOLO CON ESTE JSON:
 }`;
 }
 
-function buildPhaseTwoPrompt({ phase1Result, technicals, earningsRisk, pastAnalyses }) {
+function buildPhaseTwoPrompt({ phase1Result, technicals, earningsRisk, insiderData, macroData, pastAnalyses }) {
   const memoryContext = buildMemoryContext(pastAnalyses);
   const techSection = Object.entries(technicals).map(([sym, t]) => {
     if (!t) return `  ${sym}: Datos técnicos no disponibles`;
@@ -264,6 +265,8 @@ ${candidatesContext}
 
 DATOS TÉCNICOS DETALLADOS DE LOS CANDIDATOS:
 ${techSection || 'No hay datos técnicos disponibles'}
+${macroData?.summary ? `\nENTORNO MACROECONÓMICO\n  ${macroData.summary}` : ''}
+${insiderData && Object.keys(insiderData).length > 0 ? `\nACTIVIDAD INSIDER (últimos 30 días)\n${Object.entries(insiderData).map(([sym, d]) => `  ${sym}: ${d.summary}`).join('\n')}` : ''}
 
 INSTRUCCIONES FASE 2:
 Usá TODOS los datos técnicos para determinar niveles EXACTOS. Máximo 3 recomendaciones.
