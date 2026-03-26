@@ -58,9 +58,9 @@ app.get('/health', (req, res) => {
 app.get('/analysis/latest', (req, res) => {
   const analysis = global.appState.latestAnalysis;
   if (!analysis) {
-    return res.json({ 
-      analysis: null, 
-      message: 'Todavía no hay análisis. Presioná "Analizar Ahora" o esperá el horario automático.' 
+    return res.json({
+      analysis: null,
+      message: 'Todavía no hay análisis. Presioná "Analizar Ahora" o esperá el horario automático.'
     });
   }
   res.json({ analysis });
@@ -74,16 +74,16 @@ app.get('/analysis/history', (req, res) => {
 /** Disparar análisis manual */
 app.post('/analysis/trigger', requireSecret, async (req, res) => {
   if (isRunning()) {
-    return res.status(409).json({ 
+    return res.status(409).json({
       error: 'Ya hay un análisis en curso. Esperá unos segundos.',
-      isRunning: true 
+      isRunning: true
     });
   }
 
   // Responder inmediatamente y correr el análisis en background
-  res.json({ 
+  res.json({
     message: 'Análisis iniciado. Tomará entre 15-30 segundos.',
-    isRunning: true 
+    isRunning: true
   });
 
   runAnalysis({ manual: true }).catch(err => {
@@ -124,9 +124,9 @@ app.post('/settings', requireSecret, (req, res) => {
     console.log(`[Settings] Auto-analysis ${global.appState.settings.enabled ? 'enabled' : 'disabled'}`);
   }
 
-  res.json({ 
+  res.json({
     message: 'Settings actualizados',
-    settings: global.appState.settings 
+    settings: global.appState.settings
   });
 });
 
@@ -163,7 +163,7 @@ app.listen(PORT, () => {
   console.log(`\n🚀 Market Analyzer Server running on port ${PORT}`);
   console.log(`📅 Auto-analysis: Mon-Fri, ${global.appState.settings.delayMinutes}min after market open`);
   console.log(`🔑 API_SECRET: ${process.env.API_SECRET ? 'configured' : 'NOT configured (open access)'}\n`);
-  
+
   // Iniciar cron scheduler
   setupCron();
 });

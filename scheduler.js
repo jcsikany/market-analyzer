@@ -4,11 +4,6 @@ const { isMarketOpenToday } = require('./utils/holidays');
 
 let cronJob = null;
 
-/**
- * Wall Street abre a las 9:30 AM ET.
- * Opciones de delay configurables: 15, 30, 45, 60 minutos.
- * → Ejecución a las: 9:45, 10:00, 10:15, 10:30 AM ET
- */
 function delayToTime(delayMinutes) {
   const openHour = 9;
   const openMinute = 30;
@@ -18,26 +13,18 @@ function delayToTime(delayMinutes) {
   return { hour, minute };
 }
 
-/**
- * Configura el cron job con el delay actual de settings
- */
 function setupCron() {
   startCronWithDelay(global.appState?.settings?.delayMinutes ?? 30);
 }
 
-/**
- * Inicia (o reinicia) el cron con un nuevo delay
- * @param {number} delayMinutes - minutos después de la apertura (15, 30, 45, 60)
- */
 function startCronWithDelay(delayMinutes) {
-  // Detener cron anterior si existe
   if (cronJob) {
     cronJob.stop();
     console.log('[Scheduler] Previous cron stopped.');
   }
 
   const { hour, minute } = delayToTime(delayMinutes);
-  const cronExpression = `${minute} ${hour} * * 1-5`; // Lun-Vie
+  const cronExpression = `${minute} ${hour} * * 1-5`;
 
   console.log(`[Scheduler] Setting up cron: ${cronExpression} ET (${hour}:${minute.toString().padStart(2,'0')} AM ET = ${delayMinutes}min after open)`);
 
@@ -45,7 +32,7 @@ function startCronWithDelay(delayMinutes) {
     cronExpression,
     async () => {
       const { isOpen, reason } = isMarketOpenToday();
-      
+
       if (!isOpen) {
         console.log(`[Scheduler] Skipping — market closed (${reason})`);
         return;
@@ -57,7 +44,7 @@ function startCronWithDelay(delayMinutes) {
       }
 
       console.log(`[Scheduler] Firing at ${hour}:${minute.toString().padStart(2,'0')} ET (${delayMinutes}min after open)`);
-      
+
       try {
         await runAnalysis({ manual: false });
       } catch (err) {
@@ -74,10 +61,6 @@ function startCronWithDelay(delayMinutes) {
   return cronJob;
 }
 
-/**
- * Actualiza el delay y reinicia el cron
- * @param {number} newDelay
- */
 function updateDelay(newDelay) {
   const allowed = [15, 30, 45, 60];
   if (!allowed.includes(newDelay)) {

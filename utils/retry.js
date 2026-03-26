@@ -1,17 +1,3 @@
-/**
- * Retry con backoff exponencial + jitter
- * Usado por todos los servicios para que un fallo puntual no rompa el análisis.
- */
-
-/**
- * @param {Function} fn - función async a reintentar
- * @param {Object} opts
- * @param {number} opts.retries   - máximo de reintentos (default: 3)
- * @param {number} opts.baseMs    - delay base en ms (default: 800)
- * @param {number} opts.maxMs     - delay máximo en ms (default: 8000)
- * @param {string} opts.label     - nombre para los logs
- * @param {Function} opts.onRetry - callback opcional (attempt, error)
- */
 async function withRetry(fn, {
   retries = 3,
   baseMs = 800,
@@ -29,7 +15,6 @@ async function withRetry(fn, {
 
       if (attempt === retries) break;
 
-      // Backoff exponencial con jitter aleatorio (±20%)
       const exponential = Math.min(baseMs * Math.pow(2, attempt), maxMs);
       const jitter = exponential * (0.8 + Math.random() * 0.4);
       const delay = Math.round(jitter);
@@ -48,11 +33,6 @@ async function withRetry(fn, {
   throw lastError;
 }
 
-/**
- * Ejecuta múltiples promesas en paralelo con fallback individual.
- * A diferencia de Promise.all, si una falla devuelve el fallback en vez de rechazar todo.
- * @param {Array<{ fn: Function, fallback: any, label: string }>} tasks
- */
 async function parallelWithFallback(tasks) {
   return Promise.all(
     tasks.map(async ({ fn, fallback, label }) => {
