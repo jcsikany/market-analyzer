@@ -1,8 +1,7 @@
-const yahooFinance = require('yahoo-finance2').default;
+const { default: YahooFinance } = require('yahoo-finance2');
+const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 const { RSI, MACD, BollingerBands, EMA, SMA, ATR } = require('technicalindicators');
 const { withRetry } = require('../utils/retry');
-
-yahooFinance.setGlobalConfig({ validation: { logErrors: false } });
 
 async function fetchTechnicals(symbol, days = 60) {
   return withRetry(async () => {

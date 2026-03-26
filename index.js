@@ -1,6 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const { default: YahooFinance } = require('yahoo-finance2');
+const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 const { setupCron, updateDelay } = require('./scheduler');
 const { runAnalysis, isRunning } = require('./services/orchestrator');
 const db = require('./db');
@@ -223,7 +225,6 @@ app.get('/paper-trades/summary', (req, res) => {
 
 /** Mini chart data para sparklines */
 app.get('/chart/:symbol', async (req, res) => {
-  const yahooFinance = require('yahoo-finance2').default;
   const symbol = req.params.symbol.toUpperCase();
   const days = parseInt(req.query.days) || 5;
 

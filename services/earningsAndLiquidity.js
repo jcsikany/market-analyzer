@@ -1,7 +1,6 @@
-const yahooFinance = require('yahoo-finance2').default;
+const { default: YahooFinance } = require('yahoo-finance2');
+const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 const { withRetry } = require('../utils/retry');
-
-yahooFinance.setGlobalConfig({ validation: { logErrors: false } });
 
 const LIQUIDITY_FILTERS = {
   minAvgVolume: 500_000, minPrice: 10, minMarketCap: 500_000_000,

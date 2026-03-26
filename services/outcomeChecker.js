@@ -1,4 +1,5 @@
-const yahooFinance = require('yahoo-finance2').default;
+const { default: YahooFinance } = require('yahoo-finance2');
+const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 const db = require('../db');
 
 /**

@@ -1,8 +1,7 @@
-const yahooFinance = require('yahoo-finance2').default;
+const { default: YahooFinance } = require('yahoo-finance2');
+const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 const { withRetry, parallelWithFallback } = require('../utils/retry');
 const { filterByLiquidity } = require('./earningsAndLiquidity');
-
-yahooFinance.setGlobalConfig({ validation: { logErrors: false } });
 
 const INDICES = { SPY: 'S&P 500', QQQ: 'Nasdaq 100', DIA: 'Dow Jones', IWM: 'Russell 2000' };
 
