@@ -233,8 +233,8 @@ app.get('/chart/:symbol', async (req, res) => {
     startDate.setDate(startDate.getDate() - (days * 2)); // extra days for weekends
 
     const result = await yahooFinance.chart(symbol, {
-      period1: startDate.toISOString().split('T')[0],
-      period2: endDate.toISOString().split('T')[0],
+      period1: startDate,
+      period2: endDate,
       interval: '1d',
     });
 
@@ -244,7 +244,8 @@ app.get('/chart/:symbol', async (req, res) => {
 
     res.json({ symbol, prices, dates });
   } catch (err) {
-    res.status(500).json({ error: `Chart data unavailable for ${req.params.symbol}` });
+    console.error(`[Chart] Error for ${req.params.symbol}:`, err.message);
+    res.status(500).json({ error: `Chart data unavailable for ${req.params.symbol}`, detail: err.message });
   }
 });
 
