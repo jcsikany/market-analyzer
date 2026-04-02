@@ -41,6 +41,11 @@ function requireSecret(req, res, next) {
 
 // ─── Existing Routes ────────────────────────────────────────────────────────
 
+/** Ping — minimal keep-alive for cron-job.org */
+app.get('/ping', (req, res) => {
+  res.set('Content-Type', 'text/plain').send('ok');
+});
+
 /** Health check */
 app.get('/health', (req, res) => {
   res.json({
@@ -143,17 +148,20 @@ app.post('/register-token', (req, res) => {
   const { token } = req.body;
   if (!token) return res.status(400).json({ error: 'Token requerido' });
 
+  db.savePushToken(token);
+  // Sincronizar con memoria
   const tokens = global.appState.settings.pushTokens;
   if (!tokens.includes(token)) {
     tokens.push(token);
-    console.log(`[Push] New token registered. Total: ${tokens.length}`);
   }
+  console.log(`[Push] Token registered. Total: ${tokens.length}`);
   res.json({ success: true, totalDevices: tokens.length });
 });
 
 /** Desregistrar push token */
 app.delete('/register-token', (req, res) => {
   const { token } = req.body;
+  db.removePushToken(token);
   const tokens = global.appState.settings.pushTokens;
   const idx = tokens.indexOf(token);
   if (idx > -1) tokens.splice(idx, 1);
@@ -269,6 +277,11 @@ async function startServer() {
     global.appState.latestAnalysis = lastFromDb;
     console.log('[Server] Loaded latest analysis from DB');
   }
+
+  // Cargar push tokens de la DB
+  const savedTokens = db.getAllPushTokens();
+  global.appState.settings.pushTokens = savedTokens;
+  console.log(`[Server] Loaded ${savedTokens.length} push tokens from DB`);
 
   app.listen(PORT, () => {
     console.log(`\n🚀 Market Analyzer Server running on port ${PORT}`);

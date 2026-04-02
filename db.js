@@ -107,6 +107,13 @@ async function initDB() {
     )
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS push_tokens (
+      token TEXT PRIMARY KEY,
+      registered_at TEXT NOT NULL
+    )
+  `);
+
   // Crear índices
   try { db.run('CREATE INDEX IF NOT EXISTS idx_rec_outcome ON recommendations(outcome)'); } catch {}
   try { db.run('CREATE INDEX IF NOT EXISTS idx_rec_ticker ON recommendations(ticker)'); } catch {}
@@ -402,6 +409,20 @@ function safeParseJSON(str) {
   try { return JSON.parse(str); } catch { return null; }
 }
 
+// ─── Push Tokens ────────────────────────────────────────────────────────────
+
+function savePushToken(token) {
+  runSql('INSERT OR IGNORE INTO push_tokens (token, registered_at) VALUES (?, ?)', [token, new Date().toISOString()]);
+}
+
+function removePushToken(token) {
+  runSql('DELETE FROM push_tokens WHERE token = ?', [token]);
+}
+
+function getAllPushTokens() {
+  return queryAll('SELECT token FROM push_tokens').map(r => r.token);
+}
+
 // ─── Export ──────────────────────────────────────────────────────────────────
 
 // initDB() debe llamarse antes de usar cualquier función
@@ -421,4 +442,7 @@ module.exports = {
   getPaperTrades,
   getPaperTradesSummary,
   parseTimeHorizon,
+  savePushToken,
+  removePushToken,
+  getAllPushTokens,
 };

@@ -151,7 +151,7 @@ async function runAnalysis({ manual = false } = {}) {
       global.appState.latestAnalysis = savedResult;
     }
 
-    const tokens = global.appState?.settings?.pushTokens ?? [];
+    const tokens = db.getAllPushTokens();
     await sendPushNotification(tokens, analysis);
 
     console.log(`[Orchestrator] ===== Analysis Complete in ${(duration / 1000).toFixed(1)}s =====`);
